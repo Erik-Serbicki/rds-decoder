@@ -6,12 +6,6 @@ import matplotlib.pyplot as plt
 import argparse
 from pathlib import Path
 
-
-# read in the signal
-#x = np.fromfile('drive/MyDrive/Digital Signal Processing/fm_rds_250k_1Msamples.iq', dtype=np.complex64)
-#sample_rate = 250e3 # 250 kHz sample rate
-#center_freq = 99.5e6 # station center frequency
-
 # clear out everything in images folder
 def remove_images():
     path = Path('images')
@@ -46,8 +40,15 @@ center_freq = float(args.center_frequency)
 file = args.filename
 
 def process_samples(x, samples_rate, center_freq):
+    N = len(x)
+
     # FM Demodulation
     x = 0.5 * np.angle(x[0:-1] * np.conj(x[1:]))
+
+    # Perform frequency shift to put the RDS signal at DC (0 Hz)
+    fo = -57e3 
+    t = np.arange(N)/sample_rate
+    x = x * np.exp(2j*np.pi*fo*t)
     return x
 
 def spectrum(samples, sample_rate):
@@ -59,7 +60,7 @@ def spectrum(samples, sample_rate):
     
     
     plt.figure(figsize=(12, 4))
-    plt.plot(t/1e3, y)
+    plt.plot(t/scaling_factor, y)
     plt.xlim(0, sample_rate/scaling_factor/2)
     plt.grid()
     
