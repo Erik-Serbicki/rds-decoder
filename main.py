@@ -108,34 +108,6 @@ def costas_loop(x, alpha, beta):
 
     return out, freq_log
 
-def process_samples(x, sample_rate, center_freq):
-    # FM Demodulation
-    x = 0.5 * np.angle(x[0:-1] * np.conj(x[1:]))
-
-    # Perform frequency shift to put the RDS signal at DC (0 Hz)
-    fo = -57e3 
-    t = np.arange(len(x))/sample_rate
-    x = x * np.exp(2j*np.pi*fo*t)
-
-    # Filter to Isolate RDS signal
-    # low-pass
-    cutoff = 7.5e3
-    taps = firwin(numtaps=53, cutoff=cutoff, fs=sample_rate)
-    x = fftconvolve(x, taps, 'valid')
-
-    # Decimate, resample, update sample rate
-    decimate_ratio = 10
-    x = x[::decimate_ratio]
-    upsample, downsample, sample_rate = set_sample_rate(decimate_ratio, sample_rate, cutoff)
-    x = resample_poly(x, upsample, downsample)
-
-    # time synchronization
-    x = mueller_muller_sync(x, 32, 0.01, 16)
-
-    # fine frequency sync
-    x = costas_loop(x, 8.0, 0.02)
-
-    return x
 
 def decode_bpsk(samples):
     bits = (np.real(samples)>0).astype(int) # decode to 1s and 0s
@@ -143,7 +115,7 @@ def decode_bpsk(samples):
     bits = bits.astype(np.uint8) # needs to be uint8 for RDS decoder
     return bits
 
-def decode_rds(x):
+def decode_rds(bits):
     # Constants
     syndrome = [383, 14, 303, 663, 748]
     offset_pos = [0, 1, 2, 3, 2]
@@ -266,6 +238,7 @@ def decode_rds(x):
                         print("Still Sync-ed (Got ", wrong_blocks_counter, " bad blocks on ", blocks_counter, " total)")
                     blocks_counter = 0
                     wrong_blocks_counter = 0
+    return bytes_out
 
 def parse_rds(bytes_out):
     # RDS parsing
@@ -362,7 +335,7 @@ def parse_rds(bytes_out):
             radiotext_AB_flag = (group_1 >> 4) & 0x01
             text_segment_address_code = group_1 & 0x0f
             if AB:
-                radiotext[text_segm
+                radiotext[text_segment_address_code*2] = chr((group_3>>8)&0xff)
                 radiotext[text_segment_address_code * 2 + 1] = chr(group_3        & 0xff)
             else:
                 radiotext[text_segment_address_code *4     ] = chr((group_2 >> 8) & 0xff)
@@ -387,6 +360,40 @@ def spectrum(samples, sample_rate):
     plt.xlim(0, sample_rate/scaling_factor/2)
     plt.grid()
     
+def process_samples(x, sample_rate, center_freq):
+    # FM Demodulation
+    x = 0.5 * np.angle(x[0:-1] * np.conj(x[1:]))
+
+    # Perform frequency shift to put the RDS signal at DC (0 Hz)
+    fo = -57e3 
+    t = np.arange(len(x))/sample_rate
+    x = x * np.exp(2j*np.pi*fo*t)
+
+    # Filter to Isolate RDS signal
+    # low-pass
+    cutoff = 7.5e3
+    taps = firwin(numtaps=53, cutoff=cutoff, fs=sample_rate)
+    x = fftconvolve(x, taps, 'valid')
+
+    # Decimate, resample, update sample rate
+    decimate_ratio = 10
+    x = x[::decimate_ratio]
+    upsample, downsample, sample_rate = set_sample_rate(decimate_ratio, sample_rate, cutoff)
+    x = resample_poly(x, upsample, downsample)
+
+    # time synchronization
+    x = mueller_muller_sync(x, 32, 0.01, 16)
+
+    # fine frequency sync
+    x, log = costas_loop(x, 8.0, 0.02)
+
+    # demodulate and decode the bpsk signal
+    x = decode_bpsk(x)
+
+    x = decode_rds(x)
+
+    return x
+
 def main():
     # clear out images directory
     #remove_images()
@@ -394,8 +401,9 @@ def main():
     
     x = np.fromfile(file, dtype=np.complex64)
     x_processed = process_samples(x, sample_rate, center_freq)
-    bits = decode_bpsk(x)
-    rds_text = decode_rds(bits)
+    
+    # parse the processed signal
+    parse_rds(x_processed)
 
     # timing test block
     test = False
