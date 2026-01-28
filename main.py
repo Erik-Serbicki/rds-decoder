@@ -5,6 +5,7 @@ from scipy.signal import resample_poly, firwin, bilinear, fftconvolve, lfilter
 import matplotlib.pyplot as plt
 import argparse
 from pathlib import Path
+import time
 
 # clear out everything in images folder
 def remove_images():
@@ -39,6 +40,8 @@ sample_rate = scaling_factor*float(args.sample_rate)
 center_freq = float(args.center_frequency)
 file = args.filename
 
+
+
 def set_sample_rate(decimate_ratio, orig_sample_rate, cutoff):
     temp_rate = orig_sample_rate / decimate_ratio
     downsample = temp_rate / 1e3
@@ -51,21 +54,21 @@ def set_sample_rate(decimate_ratio, orig_sample_rate, cutoff):
             break
     return temp_rate/1e3, downsample, temp_rate 
 
-def mueller_muller_sync(x, interp, coeff, sps):
+def mueller_muller_sync(samples, interp, coeff, sps):
     mu = 0 # initial estimate of sample phase
 
     # interpolate the input signal (add detail)
-    samples_interp = resample_poly(x, interp, 1)
+    samples_interp = resample_poly(samples, interp, 1)
 
     # initialize output
-    out = np.zeros(len(x)+10, dtype=np.complex64)
-    out_rail = np.zeros(len(x)+10, dtype=np.complex64)
+    out = np.zeros(len(samples)+10, dtype=np.complex64)
+    out_rail = np.zeros(len(samples)+10, dtype=np.complex64)
 
     # input and output index
     i_in = 0
     i_out = 2
 
-    while i_out < len(x) and i_in + interp < len(x):
+    while i_out < len(samples) and i_in + interp < len(samples):
         out[i_out] = samples_interp[i_in*interp + int(mu*interp)]
         out_rail[i_out] = int(np.real(out[i_out])>0) + 1j*int(np.imag(out[i_out])>0)
 
@@ -79,6 +82,31 @@ def mueller_muller_sync(x, interp, coeff, sps):
         i_out += 1
     out = out[2:i_out]
     return out
+
+def costas_loop(x, alpha, beta):
+    N = len(x)
+    phase = 0
+    freq = 0
+
+    out = np.zeros(N, dtype=np.complex64)
+    freq_log = []
+
+    for i in range(N):
+        out[i] = x[i] * np.exp(-1j*phase)
+        error = np.real(out[i]*np.imag(out[i]))
+
+        # recalc phase and offet
+        freq += (beta*error)
+        freq_log.append(freq*sample_rate/(2*np.pi))
+        phase += freq + (alpha*error)
+
+        # adjust phase between 0 and 2pi
+        while phase >= 2*np.pi:
+            phase -= 2*np.pi
+        while phase < 0:
+            phase += 2*np.pi
+
+    return out, freq_log
 
 def process_samples(x, sample_rate, center_freq):
     # FM Demodulation
@@ -99,11 +127,21 @@ def process_samples(x, sample_rate, center_freq):
     decimate_ratio = 10
     x = x[::decimate_ratio]
     upsample, downsample, sample_rate = set_sample_rate(decimate_ratio, sample_rate, cutoff)
+    x = resample_poly(x, upsample, downsample)
 
     # time synchronization
     x = mueller_muller_sync(x, 32, 0.01, 16)
 
+    # fine frequency sync
+    x = costas_loop(x, 8.0, 0.02)
+
     return x
+
+def decode_bpsk(samples):
+    bits = (np.real(samples)>0).astype(int) # decode to 1s and 0s
+    bits = (bits[1:] - bits[0:-1]) % 2
+    bits = bits.astype(np.uint8) # needs to be uint8 for RDS decoder
+    return bits
 
 def spectrum(samples, sample_rate):
     y = np.abs(np.fft.fft(samples, 2**14))**2 / (len(samples)*sample_rate)
@@ -120,15 +158,41 @@ def spectrum(samples, sample_rate):
     
 def main():
     # clear out images directory
-    remove_images()
+    #remove_images()
     
     
     x = np.fromfile(file, dtype=np.complex64)
+    x_processed = process_samples(x, sample_rate, center_freq)
+    bits = decode_bpsk(x)
+    print(bits[:10])
 
-    # perform processing
-    x =  process_samples(x, sample_rate, center_freq)
+    # timing test block
+    test = False
+    test_num = 10
+    if test:
+        process_time_results = []
+        perf_counter_results = []
+        for i in range(test_num):
+            t1 = time.process_time()
+            t2 = time.perf_counter()
+            x1 =  process_samples(x, sample_rate, center_freq)
+            elapsed2 = time.perf_counter() - t2
+            elapsed1 =  time.process_time() - t1
+            process_time_results.append(elapsed1)
+            perf_counter_results.append(elapsed2)
 
-    # TEST AREA
+        plt.figure()
+        plt.plot(process_time_results, '.-')
+        plt.plot(perf_counter_results, '.-')
+        plt.legend(["process_time()", "perf_counter()"])
+        plt.xlabel("Test #")
+        plt.ylabel("Time (ns)")
+        plt.grid()
+        plt.savefig("images/time.png")
+        print(f"Time test completed, average time: {np.mean(process_time_results)} s.")
+
+
+    # fourier transform
     #spectrum(x, sample_rate)
     #plt.savefig("images/psd.png")
 
