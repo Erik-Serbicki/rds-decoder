@@ -11,5 +11,5 @@ Example with the included iq file on Linux:
 ```bash
 python3 main.py samples.iq -s 250 -f 99.5 -u k
 ```
-Specifies a sample rate of 250 kHz and a carrier frequency of 99.5 MHz. All FM radio stations are in the MHz range, so the units flag only specifies the scaling factor for the sampel rate.
+Specifies a sample rate of 250 kHz and a carrier frequency of 99.5 MHz. All FM radio stations are in the MHz range, so the units flag only specifies the scaling factor for the sample rate.
 
